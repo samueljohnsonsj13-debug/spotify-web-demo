@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles.css';
 
-const tracks = [
+const initialTracks = [
   {
     id: 1,
     title: 'Midnight Echo',
@@ -83,12 +83,32 @@ const formatTime = (seconds) => {
 
 function App() {
   const [search, setSearch] = useState('');
-  const [selectedTrackId, setSelectedTrackId] = useState(tracks[0].id);
+  const [tracks, setTracks] = useState(() => {
+    try {
+      const raw = localStorage.getItem('uploadedTracks');
+      if (!raw) return initialTracks;
+      const uploaded = JSON.parse(raw);
+      // uploaded items include audioDataUrl (data:audio/...) and metadata
+      return [...initialTracks, ...uploaded.map((u, i) => ({ ...u, id: initialTracks.length + 1 + i }))];
+    } catch (e) {
+      return initialTracks;
+    }
+  });
+
+  const [selectedTrackId, setSelectedTrackId] = useState(tracks[0]?.id ?? 1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.72);
   const audioRef = useRef(null);
+
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   const filteredTracks = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -101,11 +121,11 @@ function App() {
         track.album.toLowerCase().includes(query)
       );
     });
-  }, [search]);
+  }, [search, tracks]);
 
   const selectedTrack = useMemo(
     () => tracks.find((track) => track.id === selectedTrackId) ?? tracks[0],
-    [selectedTrackId]
+    [selectedTrackId, tracks]
   );
 
   useEffect(() => {
@@ -119,7 +139,7 @@ function App() {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const nextTrack = selectedTrack.audioUrl;
+    const nextTrack = selectedTrack?.audioUrl || selectedTrack?.audioDataUrl || '';
     if (audio.src !== nextTrack) {
       audio.src = nextTrack;
       audio.load();
@@ -163,6 +183,54 @@ function App() {
     setCurrentTime(nextTime);
   };
 
+  // Upload handling
+  const fileRef = useRef(null);
+  const titleRef = useRef(null);
+  const artistRef = useRef(null);
+  const albumRef = useRef(null);
+
+  const openUpload = () => setIsUploadOpen(true);
+  const closeUpload = () => setIsUploadOpen(false);
+
+  const handleUploadSubmit = (event) => {
+    event.preventDefault();
+    const file = fileRef.current?.files?.[0];
+    if (!file) return alert('Please pick an audio file to upload.');
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const newTrack = {
+        id: Date.now(),
+        title: (titleRef.current?.value || file.name).replace(/\.(mp3|wav|ogg|m4a)$/i, ''),
+        artist: artistRef.current?.value || 'Unknown Artist',
+        album: albumRef.current?.value || 'Uploaded',
+        duration: 0,
+        cover: 'linear-gradient(135deg, #8b5cf6 0%, #4338ca 100%)',
+        audioDataUrl: dataUrl,
+      };
+
+      const next = [...tracks, newTrack];
+      setTracks(next);
+
+      // Persist uploaded tracks metadata + data url (small demo only)
+      try {
+        const saved = JSON.parse(localStorage.getItem('uploadedTracks') || '[]');
+        saved.push(newTrack);
+        localStorage.setItem('uploadedTracks', JSON.stringify(saved));
+      } catch (e) {
+        console.warn('Failed to persist uploaded track', e);
+      }
+
+      setSelectedTrackId(newTrack.id);
+      setIsPlaying(true);
+      closeUpload();
+    };
+
+    // Read as data URL so it can persist in localStorage for demo purposes
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -189,6 +257,12 @@ function App() {
             </button>
           ))}
         </div>
+
+        <div style={{ marginTop: 16 }}>
+          <button className="primary-button" onClick={openUpload} style={{ width: '100%' }}>
+            Upload
+          </button>
+        </div>
       </aside>
 
       <main className="main-panel">
@@ -199,6 +273,9 @@ function App() {
           </div>
 
           <div className="topbar-actions">
+            <button className="ghost-button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+              {theme === 'dark' ? 'Light' : 'Dark'}
+            </button>
             <button className="ghost-button">Premium</button>
             <button className="ghost-button">Support</button>
             <button className="ghost-button">Download</button>
@@ -329,6 +406,42 @@ function App() {
         onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
         onEnded={() => setIsPlaying(false)}
       />
+
+      {isUploadOpen && (
+        <div className="modal-backdrop" onClick={closeUpload}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Upload a track</h3>
+            <form onSubmit={handleUploadSubmit} className="upload-form">
+              <label>
+                Audio file
+                <input ref={fileRef} type="file" accept="audio/*" required />
+              </label>
+
+              <label>
+                Title
+                <input ref={titleRef} type="text" placeholder="Track title (optional)" />
+              </label>
+
+              <label>
+                Artist
+                <input ref={artistRef} type="text" placeholder="Artist name (optional)" />
+              </label>
+
+              <label>
+                Album
+                <input ref={albumRef} type="text" placeholder="Album name (optional)" />
+              </label>
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                <button type="submit" className="primary-button">Upload</button>
+                <button type="button" className="secondary-button" onClick={closeUpload}>Cancel</button>
+              </div>
+
+              <p className="upload-note">Note: uploads are stored in localStorage for this demo and may be large — avoid huge files.</p>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
